@@ -1,13 +1,35 @@
 // 1. Importaciones
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const session = require('express-session'); // Movido aquí para orden
 const db = require("./db"); // Conexión a la DB
 
 const app = express();
+
+// --- CONFIGURACIÓN DE MIDDLEWARES ---
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
+// Configuración de la "memoria" del servidor (Sesiones)
+app.use(session({
+    secret: 'acceso concedido', // Frase secreta para cifrar las cookies
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false } // false porque no usamos HTTPS en localhost
+}));
+
 const port = 3000;
+
+// --- FUNCIÓN PORTERO (Middleware de Seguridad) ---
+function requiereLogin(req, res, next) {
+    if (req.session.usuarioId) {
+        // Si hay un ID en la sesión, el usuario está identificado. ¡Adelante!
+        next(); 
+    } else {
+        // Si no hay sesión, lo mandamos al login
+        res.redirect('/login.html');
+    }
+}
 
 // --- 2. RUTA DE REGISTRO (POST) ---
 app.post('/registro', async (req, res) => {
@@ -32,7 +54,7 @@ app.post('/registro', async (req, res) => {
         await db.query(sql, [nombre, correo, movil, dni, passwordHasheada]);
 
         console.log(`✅ Empleado ${nombre} guardado.`);
-        res.send(`¡Éxito! El empleado ${nombre} ha sido registrado.`);
+        res.send(`¡Éxito! El empleado ${nombre} ha sido registrado. <br><a href="/login.html">Ir al Login</a>`);
     } catch (error) {
         console.error("❌ Error al registrar:", error.message);
         res.status(500).send("Hubo un problema al guardar los datos.");
@@ -57,65 +79,113 @@ app.post('/login', async (req, res) => {
             return res.status(401).send("❌ Error: Contraseña incorrecta.");
         }
 
-        res.send(`✅ Bienvenido de nuevo, ${usuarioEncontrado.nombre}.`);
+        // GUARDAMOS LA SESIÓN 🍪
+        req.session.usuarioId = usuarioEncontrado.id;
+        req.session.nombreUsuario = usuarioEncontrado.nombre;
+
+        // Tras el éxito, lo mandamos directo al listado
+        res.redirect('/empleados');
     } catch (error) {
         res.status(500).send("Error en el inicio de sesión.");
     }
 });
 
-// --- 4. RUTA DE LISTADO (GET) ---
-app.get('/empleados', async (req, res) => {
-    try {
-        const [filas] = await db.query("SELECT * FROM empleados"); //
+// --- 4. RUTA DE LISTADO (GET) - VERSIÓN FINAL CON CSS EXTERNO Y BUSCADOR ---
+app.get('/empleados', requiereLogin, async (req, res) => {
+    // Capturamos lo que el usuario escribe en el buscador (si no hay nada, queda vacío '')
+    const busqueda = req.query.q || ''; 
 
+    try {
+        let filas;
+        // Lógica de búsqueda: Si hay texto, filtramos. Si no, traemos todo.
+        if (busqueda) {
+            const sql = "SELECT * FROM empleados WHERE nombre LIKE ? OR dni LIKE ?";
+            [filas] = await db.query(sql, [`%${busqueda}%`, `%${busqueda}%`]);
+        } else {
+            [filas] = await db.query("SELECT * FROM empleados");
+        }
+
+        // 1. Cabecera del HTML y conexión al CSS externo
         let html = `
             <html>
             <head>
                 <title>Panel de Empleados</title>
-                <style>
-                    body { font-family: Arial; padding: 20px; background-color: #f4f4f4; }
-                    table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px;}
-                    th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
-                    th { background-color: #2c3e50; color: white; }
-                    tr:nth-child(even) { background-color: #f2f2f2; }
-                    .btn-borrar { background-color: #e74c3c; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 4px; }
-                    .btn-edit { background-color: #3498db; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; margin-right: 5px; }
-                </style>
+                <link rel="stylesheet" href="/estilos.css">
             </head>
             <body>
-                <h1>📋 Plantilla de la Intranet</h1>
+                <div class="header">
+                    <h1>📋 Panel de la Intranet</h1>
+                    <div>
+                        <span>Hola, <b>${req.session.nombreUsuario}</b> | </span>
+                        <a href="/logout" class="btn btn-logout">Cerrar Sesión</a>
+                    </div>
+                </div>
+                
+                <br>
+                <a href="/registro.html" class="btn btn-nuevo">➕ Añadir Nuevo Empleado</a>
+
+                <div class="buscador-container">
+                    <form action="/empleados" method="GET" style="margin: 0; display: flex; gap: 10px; width: 100%;">
+                        <input type="text" name="q" class="input-busqueda" placeholder="Buscar por nombre o DNI..." value="${busqueda}">
+                        <button type="submit" class="btn" style="background-color: #343a40; color: white;">🔍 Buscar</button>
+                        ${busqueda ? `<a href="/empleados" style="color: #dc3545; align-self: center; text-decoration: none; margin-left: 10px;">✖ Limpiar</a>` : ''}
+                    </form>
+                </div>
+
                 <table>
-                    <tr>
-                        <th>ID</th><th>Nombre</th><th>Email</th><th>DNI</th><th>Acciones</th>
-                    </tr>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nombre y Apellidos</th>
+                            <th>Email</th>
+                            <th>DNI</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
 
-        filas.forEach(empleado => {
-           html += `
-                <tr>
-                    <td>${empleado.id}</td>
-                    <td>${empleado.nombre}</td>
-                    <td>${empleado.correo}</td>
-                    <td>${empleado.dni}</td>
-                    <td>
-                        <a href="/editar/${empleado.id}" class="btn-edit">Editar</a>
-                        <form action="/eliminar/${empleado.id}" method="POST" style="display:inline;">
-                            <button type="submit" class="btn-borrar" onclick="return confirm('¿Seguro?')">Eliminar</button>
-                        </form>
-                    </td>
-                 </tr>
-            `;
-        });
+        // 2. Bucle para generar las filas de la tabla
+        if (filas.length > 0) {
+            filas.forEach(empleado => {
+                html += `
+                    <tr>
+                        <td>${empleado.id}</td>
+                        <td>${empleado.nombre}</td>
+                        <td>${empleado.correo}</td>
+                        <td>${empleado.dni}</td>
+                        <td>
+                            <a href="/editar/${empleado.id}" class="btn btn-edit">Editar</a>
+                            <form action="/eliminar/${empleado.id}" method="POST" style="display:inline;">
+                                <button type="submit" class="btn btn-borrar" onclick="return confirm('¿Estás seguro de eliminar a ${empleado.nombre}?')">Borrar</button>
+                            </form>
+                        </td>
+                    </tr>
+                `;
+            });
+        } else {
+            // Mensaje si la búsqueda no arroja resultados
+            html += `<tr><td colspan="5" style="text-align:center;">No se encontraron empleados con ese nombre o DNI.</td></tr>`;
+        }
 
-        html += `</table><br><a href="/login.html">Volver al Login</a></body></html>`;
+        // 3. Cierre de etiquetas
+        html += `
+                    </tbody>
+                </table>
+            </body>
+            </html>
+        `;
+
         res.send(html);
+
     } catch (error) {
-        res.status(500).send("Error al cargar la lista.");
+        console.error("❌ Error en el listado:", error.message);
+        res.status(500).send("Hubo un error al cargar la lista de empleados.");
     }
 });
 
-// --- 5. RUTA EDITAR (FORMULARIO) ---
-app.get('/editar/:id', async (req, res) => {
+// --- 5. RUTA EDITAR (FORMULARIO) - PROTEGIDA 🔒 ---
+app.get('/editar/:id', requiereLogin, async (req, res) => {
     const id = req.params.id;
     try {
         const [usuarios] = await db.query("SELECT * FROM empleados WHERE id = ?", [id]);
@@ -137,12 +207,11 @@ app.get('/editar/:id', async (req, res) => {
     }
 });
 
-// --- 6. RUTA ACTUALIZAR (PROCESO) ---
-app.post('/actualizar/:id', async (req, res) => {
+// --- 6. RUTA ACTUALIZAR (PROCESO) - PROTEGIDA 🔒 ---
+app.post('/actualizar/:id', requiereLogin, async (req, res) => {
     const id = req.params.id;
     const { nombre, correo, movil, dni } = req.body;
 
-    // Aplicamos los mismos "Porteros" por seguridad
     if (!nombre.includes(' ')) return res.status(400).send("❌ Error: Falta apellido.");
     if (!correo.endsWith('@gmail.com') && !correo.endsWith('@hotmail.com')) return res.status(400).send("❌ Error: Email no válido.");
     if (dni.length !== 9) return res.status(400).send("❌ Error: El DNI debe tener 9 caracteres.");
@@ -156,14 +225,20 @@ app.post('/actualizar/:id', async (req, res) => {
     }
 });
 
-// --- 7. RUTA ELIMINAR ---
-app.post('/eliminar/:id', async (req, res) => {
+// --- 7. RUTA ELIMINAR - PROTEGIDA 🔒 ---
+app.post('/eliminar/:id', requiereLogin, async (req, res) => {
     try {
         await db.query("DELETE FROM empleados WHERE id = ?", [req.params.id]);
         res.redirect('/empleados');
     } catch (error) {
         res.status(500).send("Error al eliminar.");
     }
+});
+
+// --- 8. RUTA CERRAR SESIÓN ---
+app.get('/logout', (req, res) => {
+    req.session.destroy(); // Borramos la sesión
+    res.redirect('/login.html'); // Al inicio
 });
 
 app.listen(port, () => {
