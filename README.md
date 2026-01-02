@@ -1,11 +1,7 @@
-¡Es una idea excelente! El README es como la "portada" o el "manual de bienvenida" de tu proyecto en GitHub. Sirve para que cualquier persona (o tú mismo en el futuro) sepa qué hace la aplicación y cómo ponerla en marcha.
-
-Aquí tienes una propuesta de contenido que resume todo tu aprendizaje en DAW hasta ahora, explicada de forma sencilla:
-
-📋 Proyecto Intranet - Gestión de Empleados
+Proyecto Intranet - Gestión de Empleados
 Este es mi primer proyecto completo de desarrollo web, creado para gestionar una base de datos de empleados de forma segura y eficiente.
 
-🚀 ¿Qué hace esta aplicación?
+¿Qué hace esta aplicación?
 La aplicación permite administrar el personal de una empresa con las siguientes funciones:
 
 Sistema de Login Seguro: Control de acceso para que solo usuarios registrados entren al panel.
