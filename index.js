@@ -1,36 +1,39 @@
-// 1. Importaciones
+// 1. Importaciones y Herramientas
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
-const db = require("./db"); 
-const path = require('path'); // Herramienta para gestionar rutas de archivos
+const db = require("./db"); // Tu conexión a la base de datos
+const path = require('path'); // Herramienta para que el servidor entienda rutas de archivos
 
 const app = express();
 
-// --- CONFIGURACIÓN DE MIDDLEWARES ---
+// --- CONFIGURACIÓN DE MIDDLEWARES (Los "Filtros" del servidor) ---
+// Middleware: Es un código que se ejecuta antes de llegar a las rutas (como un portero o un traductor).
+
+// Traductor de formularios (para entender lo que envía el usuario)
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ MEJORA: Definimos la carpeta 'public' de forma absoluta para evitar fallos en la nube
+// ✅ MEJORA: Definimos la carpeta 'public' de forma absoluta (GPS para Railway)
 app.use(express.static(path.join(__dirname, 'public'))); 
 
+// Configuración de Sesiones (Memoria a corto plazo del servidor)
 app.use(session({
     secret: 'acceso concedido', 
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false } 
+    cookie: { secure: false } // false porque no usamos certificado SSL (https) aún
 }));
 
-// Puerto dinámico para Railway
+// ✅ CORRECCIÓN: Puerto dinámico que Railway necesita para funcionar
 const PORT = process.env.PORT || 3000;
 
-// --- FUNCIONES PORTERO (Middlewares de Seguridad) ---
+// --- FUNCIONES PORTERO (Seguridad) ---
 
 function requiereLogin(req, res, next) {
     if (req.session.usuarioId) {
         next(); 
     } else {
-        // Si no está logueado, lo mandamos al login
-        res.redirect('/login');
+        res.redirect('/login'); // Si no estás dentro, al login
     }
 }
 
@@ -38,29 +41,28 @@ function requiereAdmin(req, res, next) {
     if (req.session.rol === 'admin') {
         next(); 
     } else {
-        res.status(403).send("🚫 Acceso Denegado: Solo los administradores pueden realizar esta acción.");
+        res.status(403).send("🚫 Acceso Denegado: Solo los administradores pueden entrar aquí.");
     }
 }
 
-// --- RUTAS DE NAVEGACIÓN (Evitan el "Cannot GET") ---
+// --- RUTAS DE NAVEGACIÓN (Control de qué ve el usuario) ---
 
-// ✅ MEJORA: Si entra a la raíz o a /login, le servimos el archivo físico directamente
+// ✅ SOLUCIÓN AL "NOT FOUND": Si entra a la dirección principal (/), le enviamos el login
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
+// ✅ Si el usuario escribe /login (sin el .html), también funciona
 app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// --- RUTAS DE ACCESO ---
-
+// Ruta para el formulario de registro (Solo para Admin)
 app.get('/nuevo-empleado', requiereLogin, requiereAdmin, (req, res) => {
-    // ✅ MEJORA: Ruta absoluta para la carpeta privado
     res.sendFile(path.join(__dirname, 'privado', 'registro.html')); 
 });
 
-// --- RUTA DE LOGIN (POST) ---
+// --- LÓGICA DE LOGIN (POST) ---
 app.post('/login', async (req, res) => {
     const { correo, password } = req.body;
     try {
@@ -78,13 +80,15 @@ app.post('/login', async (req, res) => {
             return res.status(401).send("❌ Error: Contraseña incorrecta.");
         }
 
+        // Guardamos los datos en la sesión
         req.session.usuarioId = usuarioEncontrado.id;
         req.session.nombreUsuario = usuarioEncontrado.nombre;
         req.session.rol = usuarioEncontrado.rol; 
 
         res.redirect('/empleados');
     } catch (error) {
-        res.status(500).send("Error en el inicio de sesión.");
+        console.error(error);
+        res.status(500).send("Error interno al intentar entrar.");
     }
 });
 
@@ -189,7 +193,7 @@ app.post('/registro', requiereLogin, requiereAdmin, async (req, res) => {
         await db.query(sqlInsert, [nombre, correo, movil, dni, passwordHasheada]);
         res.send(`¡Éxito! ${nombre} ha sido registrado. <br><a href="/empleados">Volver al panel</a>`);
     } catch (error) {
-        res.status(500).send("Hubo un problema interno en el servidor.");
+        res.status(500).send("Hubo un problema al guardar el empleado.");
     }
 });
 
@@ -247,7 +251,7 @@ app.get('/logout', (req, res) => {
     res.redirect('/login'); 
 });
 
-// ESCUCHA FINAL
+// ESCUCHA FINAL: Usando el puerto dinámico de la nube
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
