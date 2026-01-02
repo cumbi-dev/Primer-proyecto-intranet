@@ -3,12 +3,15 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
 const db = require("./db"); 
+const path = require('path'); // Herramienta para gestionar rutas de archivos
 
 const app = express();
 
 // --- CONFIGURACIÓN DE MIDDLEWARES ---
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public')); 
+
+// ✅ MEJORA: Definimos la carpeta 'public' de forma absoluta para evitar fallos en la nube
+app.use(express.static(path.join(__dirname, 'public'))); 
 
 app.use(session({
     secret: 'acceso concedido', 
@@ -17,7 +20,7 @@ app.use(session({
     cookie: { secure: false } 
 }));
 
-// AJUSTE PROFESIONAL: Usar el puerto que asigne Railway o el 3000 por defecto
+// Puerto dinámico para Railway
 const PORT = process.env.PORT || 3000;
 
 // --- FUNCIONES PORTERO (Middlewares de Seguridad) ---
@@ -26,7 +29,8 @@ function requiereLogin(req, res, next) {
     if (req.session.usuarioId) {
         next(); 
     } else {
-        res.redirect('/login.html');
+        // Si no está logueado, lo mandamos al login
+        res.redirect('/login');
     }
 }
 
@@ -38,22 +42,22 @@ function requiereAdmin(req, res, next) {
     }
 }
 
-// --- NUEVAS RUTAS DE CONTROL DE INICIO (Evitan el "Cannot GET") ---
+// --- RUTAS DE NAVEGACIÓN (Evitan el "Cannot GET") ---
 
-// Si alguien entra a la raíz ( / ), lo mandamos al login
+// ✅ MEJORA: Si entra a la raíz o a /login, le servimos el archivo físico directamente
 app.get('/', (req, res) => {
-    res.redirect('/login.html');
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Si alguien escribe /login sin el .html, también lo mandamos al login
 app.get('/login', (req, res) => {
-    res.redirect('/login.html');
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
 // --- RUTAS DE ACCESO ---
 
 app.get('/nuevo-empleado', requiereLogin, requiereAdmin, (req, res) => {
-    res.sendFile(__dirname + '/privado/registro.html'); 
+    // ✅ MEJORA: Ruta absoluta para la carpeta privado
+    res.sendFile(path.join(__dirname, 'privado', 'registro.html')); 
 });
 
 // --- RUTA DE LOGIN (POST) ---
@@ -240,10 +244,10 @@ app.post('/eliminar/:id', requiereLogin, requiereAdmin, async (req, res) => {
 // --- RUTA CERRAR SESIÓN ---
 app.get('/logout', (req, res) => {
     req.session.destroy(); 
-    res.redirect('/login.html'); 
+    res.redirect('/login'); 
 });
 
-// ESCUCHA FINAL: Usando el puerto dinámico de la nube
+// ESCUCHA FINAL
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
