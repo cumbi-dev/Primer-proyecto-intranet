@@ -1,67 +1,56 @@
 // 1. Importaciones
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const session = require('express-session'); // Movido aquí para orden
+const session = require('express-session');
 const db = require("./db"); // Conexión a la DB
 
 const app = express();
 
 // --- CONFIGURACIÓN DE MIDDLEWARES ---
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public'));
+app.use(express.static('public')); // Servidor de archivos estáticos (CSS, imágenes)
 
 // Configuración de la "memoria" del servidor (Sesiones)
 app.use(session({
-    secret: 'acceso concedido', // Frase secreta para cifrar las cookies
+    secret: 'acceso concedido', 
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false } // false porque no usamos HTTPS en localhost
+    cookie: { secure: false } // false para localhost
 }));
 
 const port = 3000;
 
-// --- FUNCIÓN PORTERO (Middleware de Seguridad) ---
+// --- FUNCIONES PORTERO (Middlewares de Seguridad) ---
+
+// Portero 1: ¿Está logueado?
 function requiereLogin(req, res, next) {
     if (req.session.usuarioId) {
-        // Si hay un ID en la sesión, el usuario está identificado. ¡Adelante!
         next(); 
     } else {
-        // Si no hay sesión, lo mandamos al login
         res.redirect('/login.html');
     }
 }
 
-// --- 2. RUTA DE REGISTRO (POST) ---
-app.post('/registro', async (req, res) => {
-    const { nombre, correo, movil, password, dni } = req.body;
-
-    // Porteros de Validación
-    if (!nombre.includes(' ')) {
-        return res.status(400).send("❌ Error: Debes introducir nombre y apellidos.");
+// Portero 2: ¿Es Administrador?
+function requiereAdmin(req, res, next) {
+    if (req.session.rol === 'admin') {
+        next(); 
+    } else {
+        // Error 403: Prohibido
+        res.status(403).send("🚫 Acceso Denegado: Solo los administradores pueden realizar esta acción.");
     }
-    if (!correo.endsWith('@gmail.com') && !correo.endsWith('@hotmail.com')) {
-        return res.status(400).send("❌ Error: Solo se aceptan correos de @gmail.com o @hotmail.com.");
-    }
-    if (dni.length !== 9) {
-        return res.status(400).send("❌ Error: El DNI debe tener exactamente 9 caracteres.");
-    }
+}
 
-    try {
-        const salt = bcrypt.genSaltSync(10);
-        const passwordHasheada = bcrypt.hashSync(password, salt);
+// --- RUTAS DE ACCESO ---
 
-        const sql = 'INSERT INTO empleados (nombre, correo, movil, dni, password) VALUES (?, ?, ?, ?, ?)';
-        await db.query(sql, [nombre, correo, movil, dni, passwordHasheada]);
-
-        console.log(`✅ Empleado ${nombre} guardado.`);
-        res.send(`¡Éxito! El empleado ${nombre} ha sido registrado. <br><a href="/login.html">Ir al Login</a>`);
-    } catch (error) {
-        console.error("❌ Error al registrar:", error.message);
-        res.status(500).send("Hubo un problema al guardar los datos.");
-    }
+// Ruta protegida para servir el formulario de registro
+// Actualizamos la ruta para que busque en la carpeta 'privado'
+app.get('/nuevo-empleado', requiereLogin, requiereAdmin, (req, res) => {
+    // __dirname es una palabra técnica que significa "la carpeta donde estoy ahora"
+    res.sendFile(__dirname + '/privado/registro.html'); 
 });
 
-// --- 3. RUTA DE LOGIN (POST) ---
+// --- RUTA DE LOGIN (POST) ---
 app.post('/login', async (req, res) => {
     const { correo, password } = req.body;
     try {
@@ -79,25 +68,29 @@ app.post('/login', async (req, res) => {
             return res.status(401).send("❌ Error: Contraseña incorrecta.");
         }
 
-        // GUARDAMOS LA SESIÓN 🍪
+        // GUARDAMOS LA SESIÓN con el ROL
         req.session.usuarioId = usuarioEncontrado.id;
         req.session.nombreUsuario = usuarioEncontrado.nombre;
+        req.session.rol = usuarioEncontrado.rol; 
 
-        // Tras el éxito, lo mandamos directo al listado
         res.redirect('/empleados');
     } catch (error) {
         res.status(500).send("Error en el inicio de sesión.");
     }
 });
 
-// --- 4. RUTA DE LISTADO (GET) - VERSIÓN FINAL CON CSS EXTERNO Y BUSCADOR ---
+// --- 4. RUTA DE LISTADO (GET) - ACTUALIZADA CON MENSAJES FLASH ✨ ---
 app.get('/empleados', requiereLogin, async (req, res) => {
-    // Capturamos lo que el usuario escribe en el buscador (si no hay nada, queda vacío '')
     const busqueda = req.query.q || ''; 
+    const rolUsuario = req.session.rol; 
+
+    // 📩 CAPTURAMOS EL MENSAJE Y LO BORRAMOS DE LA SESIÓN PARA QUE SOLO APAREZCA UNA VEZ
+    const alerta = req.session.mensaje;
+    delete req.session.mensaje; 
 
     try {
         let filas;
-        // Lógica de búsqueda: Si hay texto, filtramos. Si no, traemos todo.
+        // Lógica de búsqueda con SQL LIKE
         if (busqueda) {
             const sql = "SELECT * FROM empleados WHERE nombre LIKE ? OR dni LIKE ?";
             [filas] = await db.query(sql, [`%${busqueda}%`, `%${busqueda}%`]);
@@ -105,24 +98,47 @@ app.get('/empleados', requiereLogin, async (req, res) => {
             [filas] = await db.query("SELECT * FROM empleados");
         }
 
-        // 1. Cabecera del HTML y conexión al CSS externo
         let html = `
             <html>
             <head>
                 <title>Panel de Empleados</title>
                 <link rel="stylesheet" href="/estilos.css">
+                <style>
+                    /* Estilos específicos para las alertas flash */
+                    .alerta { 
+                        padding: 15px; 
+                        margin-bottom: 20px; 
+                        border-radius: 5px; 
+                        font-weight: bold; 
+                        text-align: center; 
+                        font-family: Arial, sans-serif;
+                    }
+                    .exito { 
+                        background-color: #d4edda; 
+                        color: #155724; 
+                        border: 1px solid #c3e6cb; 
+                    }
+                    .borrado { 
+                        background-color: #f8d7da; 
+                        color: #721c24; 
+                        border: 1px solid #f5c6cb; 
+                    }
+                </style>
             </head>
             <body>
                 <div class="header">
                     <h1>📋 Panel de la Intranet</h1>
                     <div>
-                        <span>Hola, <b>${req.session.nombreUsuario}</b> | </span>
+                        <span>Hola, <b>${req.session.nombreUsuario}</b> (${rolUsuario}) | </span>
                         <a href="/logout" class="btn btn-logout">Cerrar Sesión</a>
                     </div>
                 </div>
                 
                 <br>
-                <a href="/registro.html" class="btn btn-nuevo">➕ Añadir Nuevo Empleado</a>
+
+                ${alerta ? `<div class="alerta ${alerta.tipo}">${alerta.texto}</div>` : ''}
+
+                ${rolUsuario === 'admin' ? '<a href="/nuevo-empleado" class="btn btn-nuevo">➕ Añadir Nuevo Empleado</a>' : ''}
 
                 <div class="buscador-container">
                     <form action="/empleados" method="GET" style="margin: 0; display: flex; gap: 10px; width: 100%;">
@@ -145,47 +161,82 @@ app.get('/empleados', requiereLogin, async (req, res) => {
                     <tbody>
         `;
 
-        // 2. Bucle para generar las filas de la tabla
         if (filas.length > 0) {
             filas.forEach(empleado => {
+                let accionesHtml = '';
+                // Acciones: Solo visibles para ADMIN
+                if (rolUsuario === 'admin') {
+                    accionesHtml = `
+                        <a href="/editar/${empleado.id}" class="btn btn-edit">Editar</a>
+                        <form action="/eliminar/${empleado.id}" method="POST" style="display:inline;">
+                            <button type="submit" class="btn btn-borrar" onclick="return confirm('¿Eliminar a ${empleado.nombre}?')">Borrar</button>
+                        </form>
+                    `;
+                } else {
+                    accionesHtml = '<span style="color: gray; font-style: italic;">Solo lectura</span>';
+                }
+
                 html += `
                     <tr>
                         <td>${empleado.id}</td>
                         <td>${empleado.nombre}</td>
                         <td>${empleado.correo}</td>
                         <td>${empleado.dni}</td>
-                        <td>
-                            <a href="/editar/${empleado.id}" class="btn btn-edit">Editar</a>
-                            <form action="/eliminar/${empleado.id}" method="POST" style="display:inline;">
-                                <button type="submit" class="btn btn-borrar" onclick="return confirm('¿Estás seguro de eliminar a ${empleado.nombre}?')">Borrar</button>
-                            </form>
-                        </td>
+                        <td>${accionesHtml}</td>
                     </tr>
                 `;
             });
         } else {
-            // Mensaje si la búsqueda no arroja resultados
-            html += `<tr><td colspan="5" style="text-align:center;">No se encontraron empleados con ese nombre o DNI.</td></tr>`;
+            html += `<tr><td colspan="5" style="text-align:center;">No se encontraron empleados.</td></tr>`;
         }
 
-        // 3. Cierre de etiquetas
-        html += `
-                    </tbody>
-                </table>
-            </body>
-            </html>
-        `;
-
+        html += `</tbody></table></body></html>`;
         res.send(html);
 
     } catch (error) {
         console.error("❌ Error en el listado:", error.message);
-        res.status(500).send("Hubo un error al cargar la lista de empleados.");
+        res.status(500).send("Hubo un error al cargar la lista.");
     }
 });
 
-// --- 5. RUTA EDITAR (FORMULARIO) - PROTEGIDA 🔒 ---
-app.get('/editar/:id', requiereLogin, async (req, res) => {
+// --- RUTA DE REGISTRO (POST) - CON DETECTOR DE DUPLICADOS 🕵️‍♂️ ---
+app.post('/registro', requiereLogin, requiereAdmin, async (req, res) => {
+    const { nombre, correo, movil, password, dni } = req.body;
+
+    // 1. Porteros de Validación de formato (los que ya tenías)
+    if (!nombre.includes(' ')) return res.status(400).send("❌ Error: Falta apellido.");
+    if (dni.length !== 9) return res.status(400).send("❌ Error: DNI incorrecto.");
+
+    try {
+        // 2. DETECTOR DE DUPLICADOS 🔍
+        // Buscamos si ya existe el correo o el DNI
+        const sqlCheck = 'SELECT * FROM empleados WHERE correo = ? OR dni = ?';
+        const [existentes] = await db.query(sqlCheck, [correo, dni]);
+
+        if (existentes.length > 0) {
+            // Si encontramos algo, miramos qué es exactamente lo que falla
+            let motivo = existentes[0].correo === correo ? "el correo" : "el DNI";
+            return res.status(400).send(`❌ Error: Ya existe un empleado registrado con ${motivo}.`);
+        }
+
+        // 3. Si llegamos aquí, es que no hay duplicados. Procedemos a guardar.
+        const salt = bcrypt.genSaltSync(10);
+        const passwordHasheada = bcrypt.hashSync(password, salt);
+
+        const sqlInsert = 'INSERT INTO empleados (nombre, correo, movil, dni, password) VALUES (?, ?, ?, ?, ?)';
+        await db.query(sqlInsert, [nombre, correo, movil, dni, passwordHasheada]);
+
+        console.log(`✅ Nuevo empleado guardado: ${nombre}`);
+        res.send(`¡Éxito! ${nombre} ha sido registrado. <br><a href="/empleados">Volver al panel</a>`);
+
+    } catch (error) {
+        console.error("❌ Error en el proceso:", error.message);
+        res.status(500).send("Hubo un problema interno en el servidor.");
+    }
+});
+
+// --- RUTA EDITAR (FORMULARIO) - PROTEGIDA POR ADMIN 🛡️ ---
+app.get('/editar/:id', requiereLogin, requiereAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const [usuarios] = await db.query("SELECT * FROM empleados WHERE id = ?", [id]);
@@ -207,38 +258,42 @@ app.get('/editar/:id', requiereLogin, async (req, res) => {
     }
 });
 
-// --- 6. RUTA ACTUALIZAR (PROCESO) - PROTEGIDA 🔒 ---
-app.post('/actualizar/:id', requiereLogin, async (req, res) => {
+// --- 6. RUTA ACTUALIZAR (PROCESO) ---
+app.post('/actualizar/:id', requiereLogin, requiereAdmin, async (req, res) => {
     const id = req.params.id;
     const { nombre, correo, movil, dni } = req.body;
-
-    if (!nombre.includes(' ')) return res.status(400).send("❌ Error: Falta apellido.");
-    if (!correo.endsWith('@gmail.com') && !correo.endsWith('@hotmail.com')) return res.status(400).send("❌ Error: Email no válido.");
-    if (dni.length !== 9) return res.status(400).send("❌ Error: El DNI debe tener 9 caracteres.");
 
     try {
         const sql = "UPDATE empleados SET nombre = ?, correo = ?, movil = ?, dni = ? WHERE id = ?";
         await db.query(sql, [nombre, correo, movil, dni, id]);
+        
+        // GUARDAMOS EL MENSAJE FLASH 🟢
+        req.session.mensaje = { texto: "✅ Empleado actualizado con éxito", tipo: "exito" };
+        
         res.redirect('/empleados');
     } catch (error) {
         res.status(500).send("No se pudo actualizar.");
     }
 });
 
-// --- 7. RUTA ELIMINAR - PROTEGIDA 🔒 ---
-app.post('/eliminar/:id', requiereLogin, async (req, res) => {
+// --- 7. RUTA ELIMINAR ---
+app.post('/eliminar/:id', requiereLogin, requiereAdmin, async (req, res) => {
     try {
         await db.query("DELETE FROM empleados WHERE id = ?", [req.params.id]);
+        
+        // GUARDAMOS EL MENSAJE FLASH 🔴
+        req.session.mensaje = { texto: "🗑️ Empleado eliminado correctamente", tipo: "borrado" };
+        
         res.redirect('/empleados');
     } catch (error) {
         res.status(500).send("Error al eliminar.");
     }
 });
 
-// --- 8. RUTA CERRAR SESIÓN ---
+// --- RUTA CERRAR SESIÓN ---
 app.get('/logout', (req, res) => {
-    req.session.destroy(); // Borramos la sesión
-    res.redirect('/login.html'); // Al inicio
+    req.session.destroy(); 
+    res.redirect('/login.html'); 
 });
 
 app.listen(port, () => {
